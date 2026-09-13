@@ -1,0 +1,100 @@
+name: Build Android APK
+
+# এই ওয়ার্কফ্লো নিজে থেকেই চালু হয় যখনই কোড GitHub-এ push করা হয়
+# (মেইন ব্রাঞ্চে) বা GitHub-এর "Actions" ট্যাব থেকে ম্যানুয়ালি "Run workflow" চাপলে।
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-debug:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ⚠️ এই প্রজেক্টে gradlew / gradlew.bat / gradle-wrapper.jar ফাইলগুলো
+      # নেই (AI Studio এক্সপোর্টে প্রায়ই বাদ পড়ে)। তাই ./gradlew ব্যবহার না করে
+      # gradle/actions/setup-gradle অ্যাকশন দিয়ে সরাসরি gradle-wrapper.properties-এ
+      # লেখা ভার্সনের (9.3.1) Gradle ইনস্টল করে নেওয়া হচ্ছে।
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.3.1
+          cache-disabled: false
+
+      # app/build.gradle.kts-এর debug buildType একটা debug.keystore ফাইল চায়
+      # (${rootDir}/debug.keystore) যেটা রিপোতে নেই — তাই বিল্ড ব্যর্থ না হওয়ার
+      # জন্য এখানে একটা স্ট্যান্ডার্ড অ্যান্ড্রয়েড ডিবাগ কিস্টোর অটো-জেনারেট করা হচ্ছে।
+      - name: Generate debug keystore
+        run: |
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Build Debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluentvideo-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # নিচের job-টা RELEASE (সাইনড, প্লে-স্টোরে দেওয়ার মতো) APK বানানোর জন্য।
+  # এটা ডিফল্টভাবে বন্ধ (if: false) কারণ এর জন্য আপনার নিজের কিস্টোর ও
+  # কিছু GitHub Secret লাগবে। ব্যবহার করতে চাইলে নিচের নির্দেশ অনুসরণ করুন,
+  # তারপর "if: false" লাইনটা মুছে দিন।
+  # --------------------------------------------------------------------------
+  build-release:
+    name: Build Release APK (optional, needs secrets)
+    runs-on: ubuntu-latest
+    if: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.3.1
+
+      - name: Decode release keystore from secret
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > my-upload-key.jks
+
+      - name: Build Release APK
+        env:
+          KEYSTORE_PATH: my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluentvideo-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
