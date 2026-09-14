@@ -16,6 +16,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ⚠️ কখনো কখনো ফোল্ডার আপলোডের সময় পুরো প্রজেক্ট একটা সাব-ফোল্ডারের
+      # ভেতরে চলে যায় (যেমন repo-root/fluentvideo-ai/build.gradle.kts)।
+      # এই স্টেপটা settings.gradle.kts কোথায় আছে খুঁজে বের করে, সেই ফোল্ডারের
+      # পাথ পরের স্টেপগুলোর জন্য সেভ করে রাখে — যাতে ফোল্ডার নেস্টেড থাকলেও
+      # বিল্ড চলে, ম্যানুয়ালি ফাইল সরানোর দরকার না পড়ে।
+      - name: Locate Gradle project root
+        id: locate
+        run: |
+          SETTINGS_FILE=$(find . -maxdepth 4 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1)
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "::error::কোনো settings.gradle(.kts) ফাইলই রিপোতে পাওয়া যায়নি! প্রজেক্ট ফাইলগুলো ঠিকভাবে আপলোড হয়েছে কিনা যাচাই করুন।"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "প্রজেক্ট রুট পাওয়া গেছে: $PROJECT_DIR"
+          echo "project-dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -34,8 +51,10 @@ jobs:
 
       # app/build.gradle.kts-এর debug buildType একটা debug.keystore ফাইল চায়
       # (${rootDir}/debug.keystore) যেটা রিপোতে নেই — তাই বিল্ড ব্যর্থ না হওয়ার
-      # জন্য এখানে একটা স্ট্যান্ডার্ড অ্যান্ড্রয়েড ডিবাগ কিস্টোর অটো-জেনারেট করা হচ্ছে।
+      # জন্য এখানে একটা স্ট্যান্ডার্ড অ্যান্ড্রয়েড ডিবাগ কিস্টোর অটো-জেনারেট করা হচ্ছে,
+      # ঠিক সেই (auto-detect করা) প্রজেক্ট রুট ফোল্ডারেই।
       - name: Generate debug keystore
+        working-directory: ${{ steps.locate.outputs.project-dir }}
         run: |
           if [ ! -f debug.keystore ]; then
             keytool -genkeypair -v \
@@ -48,13 +67,14 @@ jobs:
           fi
 
       - name: Build Debug APK
+        working-directory: ${{ steps.locate.outputs.project-dir }}
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: fluentvideo-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.locate.outputs.project-dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
   # --------------------------------------------------------------------------
@@ -71,6 +91,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Locate Gradle project root
+        id: locate
+        run: |
+          SETTINGS_FILE=$(find . -maxdepth 4 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1)
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "::error::কোনো settings.gradle(.kts) ফাইলই রিপোতে পাওয়া যায়নি!"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "project-dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -83,9 +114,11 @@ jobs:
           gradle-version: 9.3.1
 
       - name: Decode release keystore from secret
+        working-directory: ${{ steps.locate.outputs.project-dir }}
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > my-upload-key.jks
 
       - name: Build Release APK
+        working-directory: ${{ steps.locate.outputs.project-dir }}
         env:
           KEYSTORE_PATH: my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
@@ -96,6 +129,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fluentvideo-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: ${{ steps.locate.outputs.project-dir }}/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
-          
