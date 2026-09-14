@@ -1,7 +1,5 @@
 name: Build Android APK
 
-# এই ওয়ার্কফ্লো নিজে থেকেই চালু হয় যখনই কোড GitHub-এ push করা হয়
-# (মেইন ব্রাঞ্চে) বা GitHub-এর "Actions" ট্যাব থেকে ম্যানুয়ালি "Run workflow" চাপলে।
 on:
   push:
     branches: [ "main", "master" ]
@@ -16,17 +14,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ⚠️ কখনো কখনো ফোল্ডার আপলোডের সময় পুরো প্রজেক্ট একটা সাব-ফোল্ডারের
-      # ভেতরে চলে যায় (যেমন repo-root/fluentvideo-ai/build.gradle.kts)।
-      # এই স্টেপটা settings.gradle.kts কোথায় আছে খুঁজে বের করে, সেই ফোল্ডারের
-      # পাথ পরের স্টেপগুলোর জন্য সেভ করে রাখে — যাতে ফোল্ডার নেস্টেড থাকলেও
-      # বিল্ড চলে, ম্যানুয়ালি ফাইল সরানোর দরকার না পড়ে।
+      - name: Extract uploaded zip (if present)
+        run: |
+          ZIP_FILE=$(find . -maxdepth 3 -iname "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "zip ফাইল পাওয়া গেছে: $ZIP_FILE — এক্সট্র্যাক্ট করা হচ্ছে..."
+            mkdir -p extracted_project
+            unzip -o "$ZIP_FILE" -d extracted_project
+          else
+            echo "কোনো zip ফাইল পাওয়া যায়নি — রিপোর ফাইল সরাসরি ব্যবহার হবে।"
+          fi
+
       - name: Locate Gradle project root
         id: locate
         run: |
-          SETTINGS_FILE=$(find . -maxdepth 4 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1)
+          SETTINGS_FILE=$(find . -maxdepth 6 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1)
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::কোনো settings.gradle(.kts) ফাইলই রিপোতে পাওয়া যায়নি! প্রজেক্ট ফাইলগুলো ঠিকভাবে আপলোড হয়েছে কিনা যাচাই করুন।"
+            echo "::error::কোনো settings.gradle(.kts) ফাইলই পাওয়া যায়নি! রিপোতে সঠিক zip/ফাইল আপলোড হয়েছে কিনা যাচাই করুন।"
+            find . -maxdepth 3
             exit 1
           fi
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
@@ -39,20 +44,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # ⚠️ এই প্রজেক্টে gradlew / gradlew.bat / gradle-wrapper.jar ফাইলগুলো
-      # নেই (AI Studio এক্সপোর্টে প্রায়ই বাদ পড়ে)। তাই ./gradlew ব্যবহার না করে
-      # gradle/actions/setup-gradle অ্যাকশন দিয়ে সরাসরি gradle-wrapper.properties-এ
-      # লেখা ভার্সনের (9.3.1) Gradle ইনস্টল করে নেওয়া হচ্ছে।
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.3.1
           cache-disabled: false
 
-      # app/build.gradle.kts-এর debug buildType একটা debug.keystore ফাইল চায়
-      # (${rootDir}/debug.keystore) যেটা রিপোতে নেই — তাই বিল্ড ব্যর্থ না হওয়ার
-      # জন্য এখানে একটা স্ট্যান্ডার্ড অ্যান্ড্রয়েড ডিবাগ কিস্টোর অটো-জেনারেট করা হচ্ছে,
-      # ঠিক সেই (auto-detect করা) প্রজেক্ট রুট ফোল্ডারেই।
       - name: Generate debug keystore
         working-directory: ${{ steps.locate.outputs.project-dir }}
         run: |
@@ -77,12 +74,6 @@ jobs:
           path: ${{ steps.locate.outputs.project-dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-  # --------------------------------------------------------------------------
-  # নিচের job-টা RELEASE (সাইনড, প্লে-স্টোরে দেওয়ার মতো) APK বানানোর জন্য।
-  # এটা ডিফল্টভাবে বন্ধ (if: false) কারণ এর জন্য আপনার নিজের কিস্টোর ও
-  # কিছু GitHub Secret লাগবে। ব্যবহার করতে চাইলে নিচের নির্দেশ অনুসরণ করুন,
-  # তারপর "if: false" লাইনটা মুছে দিন।
-  # --------------------------------------------------------------------------
   build-release:
     name: Build Release APK (optional, needs secrets)
     runs-on: ubuntu-latest
@@ -91,12 +82,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Extract uploaded zip (if present)
+        run: |
+          ZIP_FILE=$(find . -maxdepth 3 -iname "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            mkdir -p extracted_project
+            unzip -o "$ZIP_FILE" -d extracted_project
+          fi
+
       - name: Locate Gradle project root
         id: locate
         run: |
-          SETTINGS_FILE=$(find . -maxdepth 4 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1)
+          SETTINGS_FILE=$(find . -maxdepth 6 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1)
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::কোনো settings.gradle(.kts) ফাইলই রিপোতে পাওয়া যায়নি!"
+            echo "::error::কোনো settings.gradle(.kts) ফাইলই পাওয়া যায়নি!"
             exit 1
           fi
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
